@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 BASE_DIR = Path(__file__).parent.parent
-DATA_DIR = BASE_DIR / "PublicTestCases/Case0"
+DATA_DIR = BASE_DIR / "PublicTestCases/Case2"
 DEG_RAD = np.pi / 180.0
 RAD_DEG = 180.0 / np.pi 
 

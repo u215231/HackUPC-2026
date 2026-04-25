@@ -1,4 +1,4 @@
-#include "optimizer_algorithms.hpp"
+#include "optimizer_algorithms_gap.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
                   << ", obstacles: " << ins.obstacles.size()
                   << ", bay types: " << ins.bays.size()
                   << ", usable area: " << area << "\n";
-        std::cerr << "Gap rules: " << (args.params.useGapRules ? "ON" : "OFF") << "\n";
+        std::cerr << "Front gap rules: " << (args.params.useGapRules ? "ON" : "OFF") << "\n";
 
         std::vector<Candidate> candidates;
         Solution best = run_full_optimizer(ins, args.params, candidates, seed);
