@@ -1,15 +1,25 @@
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+import subprocess
+import sys
 
 BASE_DIR = Path(__file__).parent.parent
-DATA_DIR = BASE_DIR / "PublicTestCases/Case0"
 DEG_RAD = np.pi / 180.0
 RAD_DEG = 180.0 / np.pi 
 
-def get_rectangle(width: int, depth: int) -> np.ndarray:
+def get_rectangle_2d(width: int, depth: int) -> np.ndarray:
     """
     Return a 2x5 array of (x, y) coords on each column representing a 
+    rectangle.
+    """
+    return np.array([
+        [0, width, width, 0, 0], 
+        [0, 0, depth, depth, 0]])
+
+def get_rectangle_3d(width: int, depth: int, height: int) -> np.ndarray:
+    """
+    Return a 3x5 array of (x, y) coords on each column representing a 
     rectangle.
     """
     return np.array([
@@ -91,18 +101,62 @@ class Data:
         self.data_dir = Path(data_dir)
     
     def display_warehouse(self):
-        if self.warehouse.ndim <= 1:
+        warehouse = self.warehouse
+        if warehouse.ndim <= 1:
             return
-        n, m = self.warehouse.shape
+        n, m = warehouse.shape
         assert m >= 2
         for i in range(n):
             i1, i2 = i % n, (i + 1) % n
-            x_coords = [self.warehouse[i1, 0], self.warehouse[i2, 0]]
-            y_coords = [self.warehouse[i1, 1], self.warehouse[i2, 1]]
+            x_coords = [warehouse[i1, 0], warehouse[i2, 0]]
+            y_coords = [warehouse[i1, 1], warehouse[i2, 1]]
             plt.plot(x_coords, y_coords, color='k')
-        plt.scatter(self.warehouse[:, 0], self.warehouse[:, 1], color='k')
+        plt.scatter(warehouse[:, 0], warehouse[:, 1], color='k')
         plt.axis('equal')
-    
+
+    def display_warehouse_3d(self, z_level=0):
+        warehouse = self.warehouse
+        if warehouse.ndim <= 1:
+            return
+        n, m = warehouse.shape
+        assert m >= 2
+        fig = plt.gcf()
+        if not fig.axes:
+            ax = fig.add_subplot(111, projection='3d')
+        else:
+            ax = fig.gca()
+        for i in range(n):
+            i1, i2 = i % n, (i + 1) % n
+            x_coords = [
+                warehouse[i1, 0], 
+                warehouse[i1, 0],
+                warehouse[i2, 0], 
+                warehouse[i2, 0], 
+                warehouse[i1, 0]
+            ]
+            y_coords = [
+                warehouse[i1, 1], 
+                warehouse[i1, 1],
+                warehouse[i2, 1], 
+                warehouse[i2, 1], 
+                warehouse[i1, 1]
+            ]     
+            z_coords = [0, 1000, 1000, 0, 0]
+            ax.plot(x_coords, y_coords, z_coords, color='k')
+        ax.scatter(
+            self.warehouse[:, 0], 
+            self.warehouse[:, 1], 
+            0, 
+            color='k', 
+            marker='s')
+        ax.scatter(
+            self.warehouse[:, 0], 
+            self.warehouse[:, 1], 
+            1000, 
+            color='k', 
+            marker='s')
+        ax.set_box_aspect((1, 1, 0.5))
+
     def display_obstacles(self):
         obstacles = self.obstacles
         if obstacles.ndim <= 1:
@@ -111,7 +165,7 @@ class Data:
         assert m >= 4
         for i in range(n):
             translation = get_translation(obstacles[i, 0], obstacles[i, 1])
-            obstacle = get_rectangle(obstacles[i, 2], obstacles[i, 3])
+            obstacle = get_rectangle_2d(obstacles[i, 2], obstacles[i, 3])
             obstacle = transform_points(obstacle, translation)
             plt.plot(obstacle[0, :], obstacle[1, :], color='gray')
             plt.fill(obstacle[0, :], obstacle[1, :], alpha=0.2, color='blue')
@@ -149,22 +203,40 @@ class Data:
         plt.xlabel("Width [x]")
         plt.ylabel("Depth [y]")   
 
+    def display_bay(output, bay):
+        pass
+
     def display_soultion(self): 
         output = self.output
         types_of_bays = self.types_of_bays
-        if self.output is None:
+        if output is None:
             return
         for i in range(len(output)):
             bay_id = int(output[i, 0])
             translation = get_translation(output[i, 1], output[i, 2])
             rotation = get_rotation(output[i, 3] * DEG_RAD)
-            bay = get_rectangle(types_of_bays[bay_id, 1], types_of_bays[bay_id, 2])
+            bay = get_rectangle_2d(types_of_bays[bay_id, 1], types_of_bays[bay_id, 2])
             bay = transform_points(bay, translation, rotation)
-            plt.plot(bay[0, :], bay[1, :], color='blue')
+            plt.plot(bay[0, 0:2], bay[1, 0:2], color='orange', linewidth=3)
+            plt.plot(bay[0, 2:4], bay[1, 2:4], color='orange', linewidth=3)
+            plt.plot(bay[0, 1:3], bay[1, 1:3], color='gray')
+            plt.plot(bay[0, 3:5], bay[1, 3:5], color='gray')
+            center_x = np.mean(bay[0, :4])
+            center_y = np.mean(bay[1, :4])
+            plt.text(
+                center_x, 
+                center_y, 
+                str(bay_id), 
+                color='black', 
+                fontsize=9, 
+                #fontweight='bold',
+                ha='center', 
+                va='center', 
+                zorder=10)
             plt.scatter(
                 x=bay[0, :], 
                 y=bay[1, :], 
-                color='orange', 
+                color='blue', 
                 marker=(4, 0, 45 + output[i, 3]), 
                 zorder=5)
             plt.axis("equal")
@@ -185,6 +257,21 @@ def read_data(data_dir: Path | str) -> Data:
     return Data(data, data_dir)
 
 if __name__ == "__main__":
+    DATA_DIR = BASE_DIR / "PublicTestCases/Case0"
+    # print("Running Mecalux Solver...")
+    # cmd = f"./solver.out {DATA_DIR} {Data.OUTPUT} 500 10 32 8 20000 1"
+    # process = subprocess.run(
+    #     cmd, 
+    #     shell=True,
+    #     stdout=subprocess.PIPE,
+    #     stderr=subprocess.STDOUT,
+    #     text=True,           
+    #     check=True           
+    # )
+    # for line in process.stdout:
+    #     print(line, end="") 
+    #     sys.stdout.flush()
+    print("Displaying solution (press CTRL + W)...")
     data = read_data(DATA_DIR)
     data.display_warehouse_obstacles()
     data.display_soultion()
