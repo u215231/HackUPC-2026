@@ -1,0 +1,1 @@
+g++ -O3 -fopenmp main_separated.cpp -o solver.out
