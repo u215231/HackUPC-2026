@@ -1,38 +1,41 @@
-#include "optimizer_algorithms_v3.hpp"
+#include "optimizer_algorithms.hpp"
 
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
-using namespace whopt2;
+using namespace whopt;
 
-struct Args {
+struct CliArgs {
     std::string caseDir;
     std::string outputCsv;
     OptimizerParams params;
 };
 
-void usage(const char* exe) {
+void print_usage(const char* argv0) {
     std::cerr
         << "Usage:\n"
-        << "  " << exe << " <case_dir> <output.csv> "
-        << "[gridStep=250] [angleStep=90] [greedyRestarts=threads*4] "
-        << "[saChains=threads] [saIterations=30000] [useGapRules=1] [maxCandidates=800000]\n\n"
-        << "Fast test:\n"
-        << "  " << exe << " ./PublicTestCases/Case0 solution.csv 500 90 32 8 10000 1\n\n"
-        << "Better quality:\n"
-        << "  " << exe << " ./PublicTestCases/Case0 solution.csv 250 90 128 16 80000 1\n";
+        << "  " << argv0 << " <case_dir> <output.csv> "
+        << "[gridStep=500] [angleStep=10] [greedyRestarts=threads*4] "
+        << "[saChains=threads] [saIterations=25000] [useGapRules=1] [maxCandidates=250000]\n\n"
+        << "Example fast test:\n"
+        << "  " << argv0 << " ./PublicTestCases/Case0 solution.csv 500 10 32 8 20000 1\n\n"
+        << "Example better quality:\n"
+        << "  " << argv0 << " ./PublicTestCases/Case0 solution.csv 250 5 128 16 80000 1\n";
 }
 
-Args parse_args(int argc, char** argv) {
+CliArgs parse_args(int argc, char** argv) {
     if (argc < 3) {
-        usage(argv[0]);
+        print_usage(argv[0]);
         std::exit(1);
     }
-    Args a;
+
+    CliArgs a;
     a.caseDir = argv[1];
     a.outputCsv = argv[2];
+
     if (argc > 3) a.params.gridStep = std::stod(argv[3]);
     if (argc > 4) a.params.angleStep = std::stod(argv[4]);
     if (argc > 5) a.params.greedyRestarts = std::stoi(argv[5]);
@@ -41,41 +44,40 @@ Args parse_args(int argc, char** argv) {
     if (argc > 8) a.params.useGapRules = (std::stoi(argv[8]) != 0);
     if (argc > 9) a.params.maxCandidates = static_cast<std::size_t>(std::stoull(argv[9]));
 
-    if (a.params.greedyRestarts <= 0) a.params.greedyRestarts = std::max(8, num_threads_available() * 4);
-    if (a.params.saChains <= 0) a.params.saChains = std::max(1, num_threads_available());
+    if (a.params.greedyRestarts <= 0) a.params.greedyRestarts = std::max(8, thread_count() * 4);
+    if (a.params.saChains <= 0) a.params.saChains = std::max(1, thread_count());
+
     return a;
 }
 
 int main(int argc, char** argv) {
     try {
-        Args args = parse_args(argc, argv);
+        CliArgs args = parse_args(argc, argv);
+        auto t0 = std::chrono::steady_clock::now();
+
         std::uint64_t seed = static_cast<std::uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count()
         );
-        auto t0 = std::chrono::steady_clock::now();
 
         Instance ins = read_instance(args.caseDir);
-        double ua = usable_area(ins);
+        double area = usable_area(ins);
 
-        std::cerr << "Threads: " << num_threads_available() << "\n";
+        std::cerr << "Threads: " << thread_count() << "\n";
         std::cerr << "Warehouse vertices: " << ins.warehouse.size()
                   << ", obstacles: " << ins.obstacles.size()
                   << ", bay types: " << ins.bays.size()
-                  << ", usable area: " << ua << "\n";
-        std::cerr << "gridStep=" << args.params.gridStep
-                  << ", angleStep=" << args.params.angleStep
-                  << ", greedyRestarts=" << args.params.greedyRestarts
-                  << ", saChains=" << args.params.saChains
-                  << ", saIterations=" << args.params.saIterations
-                  << ", gapRules=" << (args.params.useGapRules ? "ON" : "OFF") << "\n";
+                  << ", usable area: " << area << "\n";
+        std::cerr << "Gap rules: " << (args.params.useGapRules ? "ON" : "OFF") << "\n";
 
         std::vector<Candidate> candidates;
         Solution best = run_full_optimizer(ins, args.params, candidates, seed);
 
-        if (!validate_solution_geometry(candidates, best, args.params.useGapRules)) {
-            std::cerr << "WARNING: final solution has a geometry conflict.\n";
+        bool ok = validate_solution_geometry(candidates, best, args.params.useGapRules);
+        if (!ok) {
+            std::cerr << "WARNING: final solution has a bay/gap geometry conflict.\n";
         }
 
+        // Set the last argument to true if your evaluator expects a CSV header.
         write_solution_csv(args.outputCsv, candidates, best, false);
 
         auto t1 = std::chrono::steady_clock::now();

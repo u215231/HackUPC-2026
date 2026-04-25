@@ -154,17 +154,18 @@ class Data:
         types_of_bays = self.types_of_bays
         if self.output is None:
             return
-        for id in range(len(types_of_bays)):
-            translation = get_translation(output[id, 1], output[id, 2])
-            rotation = get_rotation(output[id, 3] * DEG_RAD)
-            bay = get_rectangle(types_of_bays[id, 1], types_of_bays[id, 2])
+        for i in range(len(output)):
+            bay_id = int(output[i, 0])
+            translation = get_translation(output[i, 1], output[i, 2])
+            rotation = get_rotation(output[i, 3] * DEG_RAD)
+            bay = get_rectangle(types_of_bays[bay_id, 1], types_of_bays[bay_id, 2])
             bay = transform_points(bay, translation, rotation)
             plt.plot(bay[0, :], bay[1, :], color='blue')
             plt.scatter(
                 x=bay[0, :], 
                 y=bay[1, :], 
                 color='orange', 
-                marker=(4, 0, 45 + output[id, 3]), 
+                marker=(4, 0, 45 + output[i, 3]), 
                 zorder=5)
             plt.axis("equal")
             
