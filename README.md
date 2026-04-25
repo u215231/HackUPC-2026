@@ -6,5 +6,5 @@
     - Marc Bosch Manzano
     - Christian Clemente García
     - Pinda Li
-    - Iman Shazad Shafik
+    - Iman Shahzad Shafiq
 - Creation: 2026/04/25

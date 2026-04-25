@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
         }
 
         // Set the last argument to true if your evaluator expects a CSV header.
-        write_solution_csv(args.outputCsv, candidates, best, false);
+        write_solution_csv(args.caseDir + "/" + args.outputCsv, candidates, best, false);
 
         auto t1 = std::chrono::steady_clock::now();
         double seconds = std::chrono::duration<double>(t1 - t0).count();

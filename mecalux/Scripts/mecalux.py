@@ -73,7 +73,7 @@ class Data:
     OBSTACLES: str = "obstacles.csv"
     TYPES_OF_BAYS: str = "types_of_bays.csv"
     WAREHOUSE: str = "warehouse.csv"
-    OUTPUT: str = "output.csv"
+    OUTPUT: str = "solution.csv"
 
     ceiling: np.ndarray
     obstacles: np.ndarray
@@ -178,7 +178,7 @@ def read_data(data_dir: Path | str) -> Data:
             matrix = []
             for line in f:
                 if line != "\n":                    
-                    array = [int(v.rstrip("\n")) for v in line.split(",")]
+                    array = [float(v.rstrip("\n")) for v in line.split(",")]
                     matrix.append(array)
             data.update({path.name: matrix})
     return Data(data, data_dir)
