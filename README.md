@@ -1,7 +1,7 @@
 # HackUPC 2026: Warehouse Optimizer for Mecalux
 
 - School: Universitat Politècnica de Catalunya
-- Business: Mecalux SA
+- Business: Mecalux S.A.
 - Authors:
     - Marc Bosch Manzano
     - Christian Clemente García

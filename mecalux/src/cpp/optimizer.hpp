@@ -12,7 +12,7 @@
 // located in warehouse_helpers_gap.hpp.
 // ================================================================
 
-#include "warehouse_helpers_gap.hpp"
+#include "warehouse_helpers.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -181,67 +181,209 @@ inline Solution greedy_run(const std::vector<Candidate>& cands,
                            double usableArea,
                            bool useGapRules,
                            std::uint64_t seed,
-                           double noise = 0.20) {
+                           double noise,
+                           int inner_threads) {
     std::mt19937_64 rng(seed);
     std::uniform_real_distribution<double> U(0.0, 1.0);
 
     const int n = static_cast<int>(cands.size());
-    std::vector<int> order(n);
-    std::iota(order.begin(), order.end(), 0);
 
     double maxEff = 1e-9;
     double maxArea = 1e-9;
     double maxLoads = 1e-9;
+    double maxWallDist = 1e-9;
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+
     for (const Candidate& c : cands) {
         maxEff = std::max(maxEff, c.loads / std::max(1.0, c.price));
         maxArea = std::max(maxArea, c.bayArea);
         maxLoads = std::max(maxLoads, c.loads);
+        maxWallDist = std::max(maxWallDist, c.wallDist);
+        minX = std::min(minX, c.x);
+        minY = std::min(minY, c.y);
+        maxX = std::max(maxX, c.x);
+        maxY = std::max(maxY, c.y);
     }
+    double rangeX = std::max(1.0, maxX - minX);
+    double rangeY = std::max(1.0, maxY - minY);
 
-    // Randomized greedy key.
-    // We run many restarts in parallel, so this does not need to be perfect.
-    std::vector<double> key(n);
+    std::vector<double> base_key(n);
+    std::vector<int> cardinal_cands;
+    std::vector<int> non_cardinal_cands;
+
     for (int i = 0; i < n; ++i) {
         const Candidate& c = cands[i];
         double eff   = (c.loads / std::max(1.0, c.price)) / maxEff;
         double area  = c.bayArea / maxArea;
         double loads = c.loads / maxLoads;
-        key[i] = 0.70 * eff + 0.22 * area + 0.08 * loads + noise * U(rng);
+        
+        double wall_score = 1.0 - (c.wallDist / std::max(1.0, maxWallDist));
+        double pos_x = (c.x - minX) / rangeX;
+        double pos_y = (c.y - minY) / rangeY;
+        double pos_score = 1.0 - ((pos_x + pos_y) / 2.0);
+        
+        // Bonus for touching walls: 1.0 if it touches 2 walls (corner), 0.5 if it touches 1 wall, 0 otherwise
+        double corner_bonus = (c.wallTouches >= 2) ? 1.0 : ((c.wallTouches == 1) ? 0.5 : 0.0);
+        
+        base_key[i] = 0.50 * eff + 0.15 * area + 0.05 * loads + 0.30 * corner_bonus + 0.10 * wall_score + 0.05 * pos_score;
+        if (noise > 0.0) base_key[i] += noise * U(rng);
+
+        double mod = std::fmod(c.rotation, 90.0);
+        if (mod < 1e-5 || mod > 90.0 - 1e-5) {
+            cardinal_cands.push_back(i);
+        } else {
+            non_cardinal_cands.push_back(i);
+        }
     }
 
-    std::sort(order.begin(), order.end(), [&](int a, int b) { return key[a] > key[b]; });
+    auto cmp = [&](int a, int b) { return base_key[a] > base_key[b]; };
+    std::sort(cardinal_cands.begin(), cardinal_cands.end(), cmp);
+    std::sort(non_cardinal_cands.begin(), non_cardinal_cands.end(), cmp);
 
     std::vector<int> selected;
     selected.reserve(512);
 
-    // First pass: pack according to greedy priority.
-    for (int idx : order) {
-        if (compatible_with_selected(cands, idx, selected, useGapRules)) {
-            selected.push_back(idx);
-        }
-    }
+    auto greedy_phase = [&](std::vector<int>& active_cands) {
+        while (!active_cands.empty()) {
+            int batch_size = std::min<int>(active_cands.size(), std::max(1000, 4000 / inner_threads * inner_threads)); 
+            
+            struct EvalResult {
+                int idx = -1;
+                double score = -1.0;
+                bool compatible = false;
+            };
+            std::vector<EvalResult> results(batch_size);
 
-    // Important for your formula:
-    // More bays is not always better. Remove bad fillers.
+            #pragma omp parallel for num_threads(inner_threads) schedule(dynamic, 32)
+            for (int i = 0; i < batch_size; ++i) {
+                int cand_idx = active_cands[i];
+                results[i].idx = cand_idx;
+                
+                if (!compatible_with_selected(cands, cand_idx, selected, useGapRules)) {
+                    results[i].compatible = false;
+                    continue;
+                }
+                results[i].compatible = true;
+                
+                double score = base_key[cand_idx];
+                double bonus = 0.0;
+                bool gap_shared = false;
+                bool touching = false;
+                
+                for (int s_idx : selected) {
+                    const Candidate& other = cands[s_idx];
+                    
+                    if (!gap_shared && has_front_gap(cands[cand_idx]) && has_front_gap(other)) {
+                        if (convex_quads_interiors_overlap(cands[cand_idx].gapZone, other.gapZone)) {
+                            gap_shared = true;
+                        }
+                    }
+                    
+                    if (!touching) {
+                        if (convex_quads_close(cands[cand_idx].footprint, other.footprint, 50.0)) {
+                            touching = true;
+                        }
+                    }
+                    if (gap_shared && touching) break;
+                }
+                
+                if (gap_shared) bonus += 0.15;
+                if (touching) bonus += 0.10;
+                
+                results[i].score = score + bonus;
+            }
+
+            int next_best = -1;
+            double max_val = -1.0;
+            int next_best_i = -1;
+            
+            for (int i = 0; i < batch_size; ++i) {
+                if (results[i].compatible && results[i].score > max_val) {
+                    max_val = results[i].score;
+                    next_best = results[i].idx;
+                    next_best_i = i;
+                }
+            }
+            
+            if (next_best != -1) {
+                selected.push_back(next_best);
+                active_cands.erase(active_cands.begin() + next_best_i);
+                
+                std::vector<int> new_active;
+                new_active.reserve(active_cands.size());
+                
+                int n_active = active_cands.size();
+                std::vector<uint8_t> keep(n_active, 1);
+                
+                #pragma omp parallel for num_threads(inner_threads) schedule(static)
+                for (int i = 0; i < n_active; ++i) {
+                    if (candidates_conflict(cands[active_cands[i]], cands[next_best], useGapRules)) {
+                        keep[i] = 0;
+                    }
+                }
+                
+                for (int i = 0; i < n_active; ++i) {
+                    if (keep[i]) new_active.push_back(active_cands[i]);
+                }
+                active_cands = std::move(new_active);
+            } else {
+                active_cands.erase(active_cands.begin(), active_cands.begin() + batch_size);
+            }
+        }
+    };
+
+    // Phase 1: Solo tratar ángulos cardinales (0, 90, 180, 270)
+    greedy_phase(cardinal_cands);
+
+    // Tras la fase 1, podamos y filtramos la lista no cardinal
     prune_solution(selected, cands, usableArea);
 
-    // Second pass: only add a bay if it improves the true nonlinear objective.
+    std::vector<int> valid_non_cardinal;
+    valid_non_cardinal.reserve(non_cardinal_cands.size());
+    
+    int n_non_card = non_cardinal_cands.size();
+    std::vector<uint8_t> keep_nc(n_non_card, 1);
+    
+    #pragma omp parallel for num_threads(inner_threads) schedule(static)
+    for (int i = 0; i < n_non_card; ++i) {
+        if (!compatible_with_selected(cands, non_cardinal_cands[i], selected, useGapRules)) {
+            keep_nc[i] = 0;
+        }
+    }
+    for (int i = 0; i < n_non_card; ++i) {
+        if (keep_nc[i]) valid_non_cardinal.push_back(non_cardinal_cands[i]);
+    }
+
+    // Phase 2: Rellenar con ángulos oblicuos si quedan huecos
+    greedy_phase(valid_non_cardinal);
+
+    prune_solution(selected, cands, usableArea);
+
     Solution cur = evaluate_solution(cands, selected, usableArea);
     std::unordered_set<int> inSolution(selected.begin(), selected.end());
 
-    for (int idx : order) {
-        if (inSolution.count(idx)) continue;
-        if (!compatible_with_selected(cands, idx, selected, useGapRules)) continue;
+    // Second pass final: añadir bays individuales si mejoran la curva no lineal
+    auto try_add_remaining = [&](const std::vector<int>& pool) {
+        for (int idx : pool) {
+            if (inSolution.count(idx)) continue;
+            if (!compatible_with_selected(cands, idx, selected, useGapRules)) continue;
 
-        selected.push_back(idx);
-        Solution trial = evaluate_solution(cands, selected, usableArea);
-        if (trial.score + EPS < cur.score) {
-            cur = trial;
-            inSolution.insert(idx);
-        } else {
-            selected.pop_back();
+            selected.push_back(idx);
+            Solution trial = evaluate_solution(cands, selected, usableArea);
+            if (trial.score + EPS < cur.score) {
+                cur = trial;
+                inSolution.insert(idx);
+            } else {
+                selected.pop_back();
+            }
         }
-    }
+    };
+
+    try_add_remaining(cardinal_cands);
+    try_add_remaining(non_cardinal_cands);
 
     return evaluate_solution(cands, selected, usableArea);
 }
@@ -251,25 +393,15 @@ inline Solution run_parallel_greedy(const std::vector<Candidate>& cands,
                                     bool useGapRules,
                                     int restarts,
                                     std::uint64_t baseSeed) {
-    if (restarts <= 0) restarts = std::max(8, thread_count() * 4);
-    Solution best;
+#ifdef _OPENMP
+    omp_set_max_active_levels(2);
+#endif
 
-#pragma omp parallel
-    {
-        Solution localBest;
+    int inner_threads = thread_count();
 
-#pragma omp for schedule(dynamic)
-        for (int r = 0; r < restarts; ++r) {
-            std::uint64_t seed = baseSeed + 1000003ULL * static_cast<std::uint64_t>(r + 1);
-            Solution s = greedy_run(cands, usableArea, useGapRules, seed, 0.25);
-            if (s.score < localBest.score) localBest = std::move(s);
-        }
-
-#pragma omp critical
-        {
-            if (localBest.score < best.score) best = std::move(localBest);
-        }
-    }
+    std::uint64_t seed = baseSeed + 1000003ULL;
+    // Solo un Greedy Determinista (noise = 0.0) utilizando todos los hilos
+    Solution best = greedy_run(cands, usableArea, useGapRules, seed, 0.0, inner_threads);
 
     return best;
 }
@@ -302,9 +434,11 @@ inline Solution anneal_chain(const std::vector<Candidate>& cands,
                              double endTemp = 0.001) {
     if (iterations <= 0) iterations = 10000;
 
-    std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> U(0.0, 1.0);
-    std::uniform_int_distribution<int> candDist(0, static_cast<int>(cands.size()) - 1);
+    int num_threads = thread_count();
+    std::vector<std::mt19937_64> rngs(num_threads);
+    for (int i = 0; i < num_threads; ++i) {
+        rngs[i].seed(seed + 9176ULL * (i + 1));
+    }
 
     std::vector<int> selected = start.selected;
     Solution current = evaluate_solution(cands, selected, usableArea);
@@ -314,50 +448,75 @@ inline Solution anneal_chain(const std::vector<Candidate>& cands,
         double frac = static_cast<double>(it) / std::max(1, iterations - 1);
         double temperature = startTemp * std::pow(endTemp / startTemp, frac);
 
-        std::vector<int> next = selected;
-        bool generatedMove = false;
-        double moveType = U(rng);
+        struct MoveResult {
+            std::vector<int> next;
+            Solution trial;
+            bool valid = false;
+        };
+        std::vector<MoveResult> moves(num_threads);
 
-        if (moveType < 0.30 && !next.empty()) {
-            // Move A: remove one bay.
-            // This is necessary because some bays make the objective worse.
-            std::uniform_int_distribution<int> posDist(0, static_cast<int>(next.size()) - 1);
-            int pos = posDist(rng);
-            next.erase(next.begin() + pos);
-            generatedMove = true;
-        } else if (moveType < 0.62) {
-            // Move B: add one compatible bay.
-            for (int tries = 0; tries < 50 && !generatedMove; ++tries) {
-                int idx = candDist(rng);
-                if (compatible_with_selected(cands, idx, next, useGapRules)) {
-                    next.push_back(idx);
-                    generatedMove = true;
+        #pragma omp parallel for num_threads(num_threads)
+        for (int t = 0; t < num_threads; ++t) {
+            auto& rng = rngs[t];
+            std::uniform_real_distribution<double> U(0.0, 1.0);
+            std::uniform_int_distribution<int> candDist(0, static_cast<int>(cands.size()) - 1);
+
+            std::vector<int> next = selected;
+            bool generatedMove = false;
+            double moveType = U(rng);
+
+            if (moveType < 0.30 && !next.empty()) {
+                std::uniform_int_distribution<int> posDist(0, static_cast<int>(next.size()) - 1);
+                int pos = posDist(rng);
+                next.erase(next.begin() + pos);
+                generatedMove = true;
+            } else if (moveType < 0.62) {
+                for (int tries = 0; tries < 50 && !generatedMove; ++tries) {
+                    int idx = candDist(rng);
+                    if (compatible_with_selected(cands, idx, next, useGapRules)) {
+                        next.push_back(idx);
+                        generatedMove = true;
+                    }
                 }
-            }
-        } else if (!next.empty()) {
-            // Move C: replace one bay with another.
-            std::uniform_int_distribution<int> posDist(0, static_cast<int>(next.size()) - 1);
-            int pos = posDist(rng);
-            next.erase(next.begin() + pos);
+            } else if (!next.empty()) {
+                std::uniform_int_distribution<int> posDist(0, static_cast<int>(next.size()) - 1);
+                int pos = posDist(rng);
+                next.erase(next.begin() + pos);
 
-            for (int tries = 0; tries < 50 && !generatedMove; ++tries) {
-                int idx = candDist(rng);
-                if (compatible_with_selected(cands, idx, next, useGapRules)) {
-                    next.push_back(idx);
-                    generatedMove = true;
+                for (int tries = 0; tries < 50 && !generatedMove; ++tries) {
+                    int idx = candDist(rng);
+                    if (compatible_with_selected(cands, idx, next, useGapRules)) {
+                        next.push_back(idx);
+                        generatedMove = true;
+                    }
                 }
+                if (!generatedMove) generatedMove = true;
             }
 
-            // If replacement failed, keep it as a pure removal move.
-            if (!generatedMove) generatedMove = true;
+            if (generatedMove) {
+                moves[t].next = std::move(next);
+                moves[t].trial = evaluate_solution(cands, moves[t].next, usableArea);
+                moves[t].valid = true;
+            }
         }
 
-        if (!generatedMove) continue;
+        int bestMoveIdx = -1;
+        double bestAcceptedScore = std::numeric_limits<double>::infinity();
 
-        Solution trial = evaluate_solution(cands, next, usableArea);
-        if (accept_sa_move(current.score, trial.score, temperature, rng)) {
-            selected.swap(next);
-            current = std::move(trial);
+        for (int t = 0; t < num_threads; ++t) {
+            if (!moves[t].valid) continue;
+            
+            if (accept_sa_move(current.score, moves[t].trial.score, temperature, rngs[0])) {
+                if (moves[t].trial.score < bestAcceptedScore) {
+                    bestAcceptedScore = moves[t].trial.score;
+                    bestMoveIdx = t;
+                }
+            }
+        }
+
+        if (bestMoveIdx != -1) {
+            selected = std::move(moves[bestMoveIdx].next);
+            current = std::move(moves[bestMoveIdx].trial);
             if (current.score + EPS < best.score) best = current;
         }
     }
@@ -373,34 +532,9 @@ inline Solution run_parallel_sa(const std::vector<Candidate>& cands,
                                 int chains,
                                 int iterations,
                                 std::uint64_t baseSeed) {
-    if (chains <= 0) chains = std::max(1, thread_count());
-    Solution best = greedyBest;
-
-#pragma omp parallel
-    {
-        Solution localBest;
-
-#pragma omp for schedule(dynamic)
-        for (int ch = 0; ch < chains; ++ch) {
-            std::uint64_t seed = baseSeed + 9176ULL * static_cast<std::uint64_t>(ch + 1);
-
-            // Start one chain from the best greedy result.
-            // Start the others from different randomized greedy solutions.
-            Solution start = (ch == 0)
-                ? greedyBest
-                : greedy_run(cands, usableArea, useGapRules, seed ^ 0xA5A5A5A5ULL, 0.35);
-
-            Solution s = anneal_chain(cands, usableArea, useGapRules, start, iterations, seed);
-            if (s.score < localBest.score) localBest = std::move(s);
-        }
-
-#pragma omp critical
-        {
-            if (localBest.score < best.score) best = std::move(localBest);
-        }
-    }
-
-    return best;
+    // Only ONE chain as requested, parallelized internally
+    std::uint64_t seed = baseSeed + 9176ULL;
+    return anneal_chain(cands, usableArea, useGapRules, greedyBest, iterations, seed);
 }
 
 inline Solution run_full_optimizer(const Instance& ins,
@@ -446,7 +580,7 @@ inline Solution run_full_optimizer(const Instance& ins,
     );
     print_solution_summary("Best", best);
 
-    return best;
+    return greedy;
 }
 
 } // namespace whopt

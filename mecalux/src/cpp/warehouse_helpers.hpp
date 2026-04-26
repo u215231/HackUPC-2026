@@ -1,18 +1,22 @@
 #pragma once
 
 // ================================================================
-// warehouse_helpers_separated.hpp
+// warehouse_helpers_gap.hpp
 //
 // This file contains ONLY helper code:
 //   - data structures
 //   - CSV input/output
 //   - geometry primitives
 //   - bay placement validity checks
-//   - bay/bay conflict checks, including optional gap handling
+//   - corrected FRONT gap validation:
+//       * gap is only the rectangle in front of the bay
+//       * no bay, obstacle, or wall may occupy a gap
+//       * gap-gap overlap is allowed
+//   - bay/bay conflict checks with corrected FRONT gap handling
 //   - objective function evaluation
 //
 // The greedy algorithm and simulated annealing are NOT in this file.
-// They are implemented in optimizer_algorithms.hpp.
+// They are implemented in optimizer_algorithms_gap.hpp.
 // ================================================================
 
 #include <algorithm>
@@ -117,9 +121,12 @@ struct Candidate {
     double loads = 0.0;
     double price = 0.0;
     double bayArea = 0.0;   // objective area: width * depth, gap not counted by default
+    double gapArea = 0.0;   // width * gap, used only for validation/collision
+    double wallDist = 0.0;  // distance to nearest boundary
+    int wallTouches = 0;    // number of bay edges touching a boundary
 
-    QuadBox footprint;      // physical bay rectangle: width x depth
-    QuadBox clearance;      // physical bay plus front gap: width x (depth + gap)
+    QuadBox footprint;      // physical bay rectangle: local [0,width] x [0,depth]
+    QuadBox gapZone;        // EMPTY FRONT GAP ONLY: local [0,width] x [depth, depth+gap]
 };
 
 struct Solution {
@@ -295,6 +302,28 @@ inline std::array<Point, 4> rectangle_corners_from_local_bottom_left(
     return {{p0, p1, p2, p3}};
 }
 
+inline std::array<Point, 4> rectangle_corners_from_local_rect(
+    double x, double y,
+    double localX0, double localY0,
+    double localX1, double localY1,
+    double rotationDeg) {
+    // Creates a rotated rectangle described in the bay's LOCAL coordinates.
+    // This is used for the FRONT GAP:
+    //   local x: [0, width]
+    //   local y: [depth, depth + gap]
+    // The same pivot/origin is used: (x,y) = local bottom-left of the bay.
+    double r = rotationDeg * PI / 180.0;
+    Point ux{std::cos(r), std::sin(r)};       // local width direction
+    Point uy{-std::sin(r), std::cos(r)};      // local depth/front direction
+    Point p0{x, y};
+
+    Point a = p0 + ux * localX0 + uy * localY0;
+    Point b = p0 + ux * localX1 + uy * localY0;
+    Point c = p0 + ux * localX1 + uy * localY1;
+    Point d = p0 + ux * localX0 + uy * localY1;
+    return {{a, b, c, d}};
+}
+
 inline QuadBox make_quad_box(const std::array<Point, 4>& corners) {
     QuadBox q;
     q.corners = corners;
@@ -349,6 +378,106 @@ inline bool convex_quads_interiors_overlap(const QuadBox& qa, const QuadBox& qb)
         if (separated_on_axis({-e.y, e.x})) return false;
     }
     return true;
+}
+
+
+inline bool convex_quads_close(const QuadBox& qa, const QuadBox& qb, double tol) {
+    if (std::min(qa.maxX, qb.maxX) - std::max(qa.minX, qb.minX) <= -tol) return false;
+    if (std::min(qa.maxY, qb.maxY) - std::max(qa.minY, qb.minY) <= -tol) return false;
+
+    const auto& a = qa.corners;
+    const auto& b = qb.corners;
+
+    auto separated_by_tol = [&](Point axis) -> bool {
+        double len = std::hypot(axis.x, axis.y);
+        if (len < EPS) return false;
+        Point norm = {axis.x / len, axis.y / len};
+
+        double amin = dot(a[0], norm), amax = amin;
+        double bmin = dot(b[0], norm), bmax = bmin;
+        for (int k = 1; k < 4; ++k) {
+            double av = dot(a[k], norm);
+            double bv = dot(b[k], norm);
+            amin = std::min(amin, av); amax = std::max(amax, av);
+            bmin = std::min(bmin, bv); bmax = std::max(bmax, bv);
+        }
+        return std::min(amax, bmax) - std::max(amin, bmin) <= -tol;
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        Point e = a[(i + 1) % 4] - a[i];
+        if (separated_by_tol({-e.y, e.x})) return false;
+    }
+    for (int i = 0; i < 4; ++i) {
+        Point e = b[(i + 1) % 4] - b[i];
+        if (separated_by_tol({-e.y, e.x})) return false;
+    }
+    return true;
+}
+
+inline double point_segment_sq_dist(const Point& p, const Point& a, const Point& b) {
+    double l2 = (a.x - b.x)*(a.x - b.x) + (a.y - b.y)*(a.y - b.y);
+    if (l2 < EPS) return (p.x - a.x)*(p.x - a.x) + (p.y - a.y)*(p.y - a.y);
+    double t = std::max(0.0, std::min(1.0, dot(p - a, b - a) / l2));
+    Point proj = a + (b - a) * t;
+    return (p.x - proj.x)*(p.x - proj.x) + (p.y - proj.y)*(p.y - proj.y);
+}
+
+inline double min_dist_to_walls(const QuadBox& q, const Instance& ins) {
+    Point center = {(q.corners[0].x + q.corners[2].x) / 2.0, (q.corners[0].y + q.corners[2].y) / 2.0};
+    double min_sq_dist = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < ins.warehouse.size(); ++i) {
+        Point a = ins.warehouse[i];
+        Point b = ins.warehouse[(i + 1) % ins.warehouse.size()];
+        min_sq_dist = std::min(min_sq_dist, point_segment_sq_dist(center, a, b));
+    }
+    for (const auto& obs : ins.obstacles) {
+        Point o1 = {obs.x, obs.y};
+        Point o2 = {obs.x + obs.width, obs.y};
+        Point o3 = {obs.x + obs.width, obs.y + obs.depth};
+        Point o4 = {obs.x, obs.y + obs.depth};
+        min_sq_dist = std::min({min_sq_dist, 
+            point_segment_sq_dist(center, o1, o2),
+            point_segment_sq_dist(center, o2, o3),
+            point_segment_sq_dist(center, o3, o4),
+            point_segment_sq_dist(center, o4, o1)
+        });
+    }
+    return std::sqrt(min_sq_dist);
+}
+
+inline int count_touching_walls(const QuadBox& q, const Instance& ins, double tol = 25.0) {
+    int touches = 0;
+    for (int i = 0; i < 4; ++i) {
+        Point a = q.corners[i];
+        Point b = q.corners[(i + 1) % 4];
+        Point center = {(a.x + b.x) * 0.5, (a.y + b.y) * 0.5};
+        
+        bool touched = false;
+        for (size_t j = 0; j < ins.warehouse.size(); ++j) {
+            Point wa = ins.warehouse[j];
+            Point wb = ins.warehouse[(j + 1) % ins.warehouse.size()];
+            if (point_segment_sq_dist(center, wa, wb) <= tol * tol) {
+                touched = true; break;
+            }
+        }
+        if (!touched) {
+            for (const auto& obs : ins.obstacles) {
+                Point o1 = {obs.x, obs.y};
+                Point o2 = {obs.x + obs.width, obs.y};
+                Point o3 = {obs.x + obs.width, obs.y + obs.depth};
+                Point o4 = {obs.x, obs.y + obs.depth};
+                if (point_segment_sq_dist(center, o1, o2) <= tol * tol ||
+                    point_segment_sq_dist(center, o2, o3) <= tol * tol ||
+                    point_segment_sq_dist(center, o3, o4) <= tol * tol ||
+                    point_segment_sq_dist(center, o4, o1) <= tol * tol) {
+                    touched = true; break;
+                }
+            }
+        }
+        if (touched) touches++;
+    }
+    return touches;
 }
 
 inline bool quad_inside_warehouse(const QuadBox& q, const std::vector<Point>& warehouse) {
@@ -439,20 +568,38 @@ inline Candidate make_candidate(const Instance& ins,
 
     c.footprint = make_quad_box(rectangle_corners_from_local_bottom_left(x, y, b.width, b.depth, rotationDeg));
 
-    // Gap interpretation used here:
-    // The gap is an empty access/clearance zone in the local depth/front direction.
-    // The physical bay is width x depth.
-    // The clearance rectangle is width x (depth + gap).
-    // The gap is NOT counted as objective area by default.
-    c.clearance = make_quad_box(rectangle_corners_from_local_bottom_left(x, y, b.width, b.depth + b.gap, rotationDeg));
+    // Correct gap interpretation:
+    // The gap is NOT the whole bay+gap rectangle. It is only the empty walking zone
+    // in FRONT of the bay. In local bay coordinates:
+    //     bay footprint = [0,width] x [0,depth]
+    //     front gap     = [0,width] x [depth, depth+gap]
+    // The front direction rotates with the bay, so rotating the bay can move the
+    // gap away from a wall, obstacle, or another bay.
+    c.gapArea = b.width * std::max(0.0, b.gap);
+    c.gapZone = make_quad_box(rectangle_corners_from_local_rect(
+        x, y,
+        0.0, b.depth,
+        b.width, b.depth + std::max(0.0, b.gap),
+        rotationDeg
+    ));
+    c.wallDist = min_dist_to_walls(c.footprint, ins);
+    c.wallTouches = count_touching_walls(c.footprint, ins);
 
     return c;
 }
 
+inline bool has_front_gap(const Candidate& c) {
+    return c.gapArea > EPS;
+}
+
 inline bool candidate_obstacle_conflict(const Candidate& c, const Obstacle& o, bool useGapRules) {
     QuadBox obs = obstacle_box(o);
+    // Obstacles cannot overlap the bay footprint.
     if (convex_quads_interiors_overlap(c.footprint, obs)) return true;
-    if (useGapRules && convex_quads_interiors_overlap(c.clearance, obs)) return true;
+
+    // Obstacles also cannot occupy the FRONT GAP.
+    // Gap-gap overlap is allowed, but obstacle-gap overlap is not.
+    if (useGapRules && has_front_gap(c) && convex_quads_interiors_overlap(c.gapZone, obs)) return true;
     return false;
 }
 
@@ -460,8 +607,10 @@ inline bool candidate_static_feasible(const Instance& ins, const Candidate& c, b
     // 1) The physical bay must be inside the warehouse.
     if (!quad_inside_warehouse(c.footprint, ins.warehouse)) return false;
 
-    // 2) If using gap rules, the clearance/gap zone must also remain inside the warehouse.
-    if (useGapRules && !quad_inside_warehouse(c.clearance, ins.warehouse)) return false;
+    // 2) If using gap rules, the FRONT GAP ONLY must also remain inside the warehouse.
+    // A wall may touch the boundary of the gap, but no positive-area part of the
+    // gap may be outside the warehouse.
+    if (useGapRules && has_front_gap(c) && !quad_inside_warehouse(c.gapZone, ins.warehouse)) return false;
 
     // 3) Height must fit under the worst ceiling touched by the bay footprint's x-span.
     double minCeiling = min_ceiling_for_x_span(ins.ceiling, c.footprint.minX, c.footprint.maxX);
@@ -480,11 +629,14 @@ inline bool candidates_conflict(const Candidate& a, const Candidate& b, bool use
     if (convex_quads_interiors_overlap(a.footprint, b.footprint)) return true;
 
     if (useGapRules) {
-        // Gap rule used here:
-        // A bay's physical footprint cannot occupy another bay's clearance/gap zone.
-        // Two empty gap zones may overlap each other; that is not treated as a conflict.
-        if (convex_quads_interiors_overlap(a.clearance, b.footprint)) return true;
-        if (convex_quads_interiors_overlap(b.clearance, a.footprint)) return true;
+        // Correct gap rule:
+        //   - A bay footprint cannot occupy another bay's FRONT GAP.
+        //   - A bay gap cannot overlap an obstacle or leave the warehouse; that is checked
+        //     during candidate generation.
+        //   - Two FRONT GAPS may overlap each other, so we deliberately do NOT check
+        //     a.gapZone vs b.gapZone.
+        if (has_front_gap(a) && convex_quads_interiors_overlap(a.gapZone, b.footprint)) return true;
+        if (has_front_gap(b) && convex_quads_interiors_overlap(b.gapZone, a.footprint)) return true;
     }
 
     return false;
@@ -549,12 +701,20 @@ inline void prune_solution(std::vector<int>& selected,
         int bestRemovePos = -1;
         double bestScore = cur.score;
 
-        for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+        int n_sel = static_cast<int>(selected.size());
+        std::vector<double> evals(n_sel, std::numeric_limits<double>::infinity());
+
+        #pragma omp parallel for schedule(dynamic)
+        for (int i = 0; i < n_sel; ++i) {
             std::vector<int> tmp = selected;
             tmp.erase(tmp.begin() + i);
             Solution trial = evaluate_solution(cands, tmp, usableArea);
-            if (trial.score + EPS < bestScore) {
-                bestScore = trial.score;
+            evals[i] = trial.score;
+        }
+
+        for (int i = 0; i < n_sel; ++i) {
+            if (evals[i] + EPS < bestScore) {
+                bestScore = evals[i];
                 bestRemovePos = i;
             }
         }
