@@ -54,6 +54,16 @@ class Mecalux:
         bays_ids = self.output[:, 0].astype(int)
         return sum(bays_prices[bay] / bays_loads[bay] for bay in bays_ids)
 
+    def compute_price_sum(self) -> float:
+        bays_prices = self.types_of_bays[:, 6]
+        bays_ids = self.output[:, 0].astype(int)
+        return sum(bays_prices[bay] for bay in bays_ids)
+    
+    def compute_load_sum(self) -> float:
+        bays_loads = self.types_of_bays[:, 5]
+        bays_ids = self.output[:, 0].astype(int)
+        return sum(bays_loads[bay] for bay in bays_ids)
+
     def compute_bays_area(self) -> float:
         bays_widths = self.types_of_bays[:, 1]
         bays_heights = self.types_of_bays[:, 2]
@@ -64,14 +74,20 @@ class Mecalux:
     def compute_warehouse_area(self) -> float:
         return calculate_poligon_area(self.warehouse[:, 0], self.warehouse[:, 1])
 
-    def compute_quality(self) -> float:
+    def compute_quality_erroneous(self) -> float:
         """Quality of the solution: the cheapest as possible."""
-        if self.output is None:
-            return
         prices_loads = self.compute_price_load_ratio()
         bays_area = self.compute_bays_area()
         warehouse_area = self.compute_warehouse_area()
         return prices_loads ** (2 - bays_area / warehouse_area)
+    
+    def compute_quality_correct(self) -> float:
+        """Quality of the solution: the cheapest as possible."""
+        prices = self.compute_price_sum()
+        loads = self.compute_load_sum()
+        bays_area = self.compute_bays_area()
+        warehouse_area = self.compute_warehouse_area()
+        return (prices / loads) ** (2 - bays_area / warehouse_area)
     
     def display_warehouse_2d(self):
         warehouse = self.warehouse
@@ -253,8 +269,9 @@ if __name__ == "__main__":
     DATA_DIR = BASE_DIR / f"PublicTestCases/Case{CASE_ID}"
     OUTPUT_PATH = DATA_DIR / Mecalux.OUTPUT
     
-    COMPILE_CPP = False
-    DISPLAY_SOLUTION = True
+    ABSOLUTE_MIN = False
+    COMPILE_CPP = True
+    DISPLAY_SOLUTION = False
     DISPLAY_QUALITY = True
     RUN_SA = False # Simulated Annealing
 
@@ -276,10 +293,34 @@ if __name__ == "__main__":
             print(line, end="") 
             sys.stdout.flush()
 
+    if ABSOLUTE_MIN:
+        print("Running Mecalux Solver Absolute Minimizer...")
+        N = 20
+        quality = float("inf")
+        for i in range(N):
+            cmd = f"{SOLVER} {DATA_DIR} {OUTPUT_PATH} 0"
+            process = subprocess.run(
+                cmd, 
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,           
+                check=True           
+            )
+            data = read_data(DATA_DIR)
+            current_quality = data.compute_quality_correct()
+            if current_quality < quality:
+                quality = current_quality
+                print(f"Quality score: {quality}")
+            else:
+                continue
+        # Path(OUTPUT_PATH).rename(
+        #     OUTPUT_PATH.parent / (OUTPUT_PATH.stem + "_opt" + OUTPUT_PATH.suffix))
+    
     data = read_data(DATA_DIR)
 
     if DISPLAY_QUALITY:
-        print(f"Quality score: {data.compute_quality()}")
+        print(f"Quality score: {data.compute_quality_correct()}")
 
     if DISPLAY_SOLUTION:
         print("Displaying solution (press CTRL + W)...")
