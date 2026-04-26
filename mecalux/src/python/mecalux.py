@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import subprocess
 import sys
 from utils import *
+import time
 
 BASE_DIR = Path(__file__).parent.parent.parent
 DEG_RAD = np.pi / 180.0
@@ -234,7 +235,7 @@ class Mecalux:
         rotation = get_yaw_rotation_3d(output[3] * DEG_RAD)
         mesh = get_prism_3d_mesh(type_of_bay[1], type_of_bay[2], type_of_bay[3])
         mesh.transform(translation, rotation)
-        mesh.display_with_faces(
+        mesh.display_with_base(
             linewidth=1, 
             facecolor=(type_of_bay[0] / self.types_of_bays[:, 0].max(), 0.0, 0.0),
             facealpha=0.4)
@@ -264,13 +265,13 @@ def read_data(data_dir: Path | str) -> Mecalux:
     return Mecalux(data, data_dir)
 
 if __name__ == "__main__":
-    CASE_ID = 0
+    CASE_ID = 1
     SOLVER = "../../bin/solver.out"
-    DATA_DIR = BASE_DIR / f"PublicTestCases/Case{CASE_ID}"
+    DATA_DIR = BASE_DIR / f"PrivateTestCases/PrivateCase{CASE_ID}_flame"
     OUTPUT_PATH = DATA_DIR / Mecalux.OUTPUT
     
     ABSOLUTE_MIN = False
-    GREEDY_MIN = False
+    GREEDY_MIN = True
     DISPLAY_SOLUTION = True
     DISPLAY_QUALITY = False
     RUN_SA = False # Simulated Annealing
@@ -295,7 +296,8 @@ if __name__ == "__main__":
 
     if ABSOLUTE_MIN:
         print("Running Mecalux Solver Absolute Minimizer...")
-        N = 20
+        start_time = time.perf_counter()
+        N = 10
         quality = float("inf")
         for i in range(N):
             cmd = f"{SOLVER} {DATA_DIR} {OUTPUT_PATH} 0"
@@ -311,14 +313,16 @@ if __name__ == "__main__":
             current_quality = data.compute_quality_correct()
             if current_quality < quality:
                 quality = current_quality
-                print(f"Quality score: {quality}")
+                print(f"[{i + 1}] Quality score: {quality}")
             else:
                 continue
+        end_time = time.perf_counter()
+        print(f"Total time: {end_time - start_time} [s]")
         import shutil
         shutil.copy2(
-            OUTPUT_PATH, 
+            OUTPUT_PATH,
             OUTPUT_PATH.parent / (OUTPUT_PATH.stem + "_opt" + OUTPUT_PATH.suffix))
-    
+       
     data = read_data(DATA_DIR)
 
     if DISPLAY_QUALITY:
@@ -326,17 +330,22 @@ if __name__ == "__main__":
 
     if DISPLAY_SOLUTION:
         print("Displaying solution (press CTRL + W)...")
+        plt.figure("Solution 2D")
         data.display_warehouse_2d()
         data.display_obstacles_2d()
         data.display_soultion_2d()
-        plt.show()
+        # plt.show()
+        plt.figure("Ceiling 2D")
+        data.display_ceiling_2d()
+        # plt.show()
+        plt.figure("View 3D")
         data.display_warehouse_3d(height=0)
         data.display_obstacles_3d()
         data.display_soultion_3d()
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
         ax = plt.gca()
         ax.grid(False)
-        fix_yaw_scrolling_3d()
+        fix_roll_scrolling_3d()
         plt.show()
 
         
