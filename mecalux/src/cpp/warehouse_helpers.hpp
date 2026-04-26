@@ -122,6 +122,8 @@ struct Candidate {
     double price = 0.0;
     double bayArea = 0.0;   // objective area: width * depth, gap not counted by default
     double gapArea = 0.0;   // width * gap, used only for validation/collision
+    double wallDist = 0.0;  // distance to nearest boundary
+    int wallTouches = 0;    // number of bay edges touching a boundary
 
     QuadBox footprint;      // physical bay rectangle: local [0,width] x [0,depth]
     QuadBox gapZone;        // EMPTY FRONT GAP ONLY: local [0,width] x [depth, depth+gap]
@@ -378,6 +380,106 @@ inline bool convex_quads_interiors_overlap(const QuadBox& qa, const QuadBox& qb)
     return true;
 }
 
+
+inline bool convex_quads_close(const QuadBox& qa, const QuadBox& qb, double tol) {
+    if (std::min(qa.maxX, qb.maxX) - std::max(qa.minX, qb.minX) <= -tol) return false;
+    if (std::min(qa.maxY, qb.maxY) - std::max(qa.minY, qb.minY) <= -tol) return false;
+
+    const auto& a = qa.corners;
+    const auto& b = qb.corners;
+
+    auto separated_by_tol = [&](Point axis) -> bool {
+        double len = std::hypot(axis.x, axis.y);
+        if (len < EPS) return false;
+        Point norm = {axis.x / len, axis.y / len};
+
+        double amin = dot(a[0], norm), amax = amin;
+        double bmin = dot(b[0], norm), bmax = bmin;
+        for (int k = 1; k < 4; ++k) {
+            double av = dot(a[k], norm);
+            double bv = dot(b[k], norm);
+            amin = std::min(amin, av); amax = std::max(amax, av);
+            bmin = std::min(bmin, bv); bmax = std::max(bmax, bv);
+        }
+        return std::min(amax, bmax) - std::max(amin, bmin) <= -tol;
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        Point e = a[(i + 1) % 4] - a[i];
+        if (separated_by_tol({-e.y, e.x})) return false;
+    }
+    for (int i = 0; i < 4; ++i) {
+        Point e = b[(i + 1) % 4] - b[i];
+        if (separated_by_tol({-e.y, e.x})) return false;
+    }
+    return true;
+}
+
+inline double point_segment_sq_dist(const Point& p, const Point& a, const Point& b) {
+    double l2 = (a.x - b.x)*(a.x - b.x) + (a.y - b.y)*(a.y - b.y);
+    if (l2 < EPS) return (p.x - a.x)*(p.x - a.x) + (p.y - a.y)*(p.y - a.y);
+    double t = std::max(0.0, std::min(1.0, dot(p - a, b - a) / l2));
+    Point proj = a + (b - a) * t;
+    return (p.x - proj.x)*(p.x - proj.x) + (p.y - proj.y)*(p.y - proj.y);
+}
+
+inline double min_dist_to_walls(const QuadBox& q, const Instance& ins) {
+    Point center = {(q.corners[0].x + q.corners[2].x) / 2.0, (q.corners[0].y + q.corners[2].y) / 2.0};
+    double min_sq_dist = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < ins.warehouse.size(); ++i) {
+        Point a = ins.warehouse[i];
+        Point b = ins.warehouse[(i + 1) % ins.warehouse.size()];
+        min_sq_dist = std::min(min_sq_dist, point_segment_sq_dist(center, a, b));
+    }
+    for (const auto& obs : ins.obstacles) {
+        Point o1 = {obs.x, obs.y};
+        Point o2 = {obs.x + obs.width, obs.y};
+        Point o3 = {obs.x + obs.width, obs.y + obs.depth};
+        Point o4 = {obs.x, obs.y + obs.depth};
+        min_sq_dist = std::min({min_sq_dist, 
+            point_segment_sq_dist(center, o1, o2),
+            point_segment_sq_dist(center, o2, o3),
+            point_segment_sq_dist(center, o3, o4),
+            point_segment_sq_dist(center, o4, o1)
+        });
+    }
+    return std::sqrt(min_sq_dist);
+}
+
+inline int count_touching_walls(const QuadBox& q, const Instance& ins, double tol = 25.0) {
+    int touches = 0;
+    for (int i = 0; i < 4; ++i) {
+        Point a = q.corners[i];
+        Point b = q.corners[(i + 1) % 4];
+        Point center = {(a.x + b.x) * 0.5, (a.y + b.y) * 0.5};
+        
+        bool touched = false;
+        for (size_t j = 0; j < ins.warehouse.size(); ++j) {
+            Point wa = ins.warehouse[j];
+            Point wb = ins.warehouse[(j + 1) % ins.warehouse.size()];
+            if (point_segment_sq_dist(center, wa, wb) <= tol * tol) {
+                touched = true; break;
+            }
+        }
+        if (!touched) {
+            for (const auto& obs : ins.obstacles) {
+                Point o1 = {obs.x, obs.y};
+                Point o2 = {obs.x + obs.width, obs.y};
+                Point o3 = {obs.x + obs.width, obs.y + obs.depth};
+                Point o4 = {obs.x, obs.y + obs.depth};
+                if (point_segment_sq_dist(center, o1, o2) <= tol * tol ||
+                    point_segment_sq_dist(center, o2, o3) <= tol * tol ||
+                    point_segment_sq_dist(center, o3, o4) <= tol * tol ||
+                    point_segment_sq_dist(center, o4, o1) <= tol * tol) {
+                    touched = true; break;
+                }
+            }
+        }
+        if (touched) touches++;
+    }
+    return touches;
+}
+
 inline bool quad_inside_warehouse(const QuadBox& q, const std::vector<Point>& warehouse) {
     Point center{0.0, 0.0};
     for (const auto& p : q.corners) {
@@ -480,6 +582,8 @@ inline Candidate make_candidate(const Instance& ins,
         b.width, b.depth + std::max(0.0, b.gap),
         rotationDeg
     ));
+    c.wallDist = min_dist_to_walls(c.footprint, ins);
+    c.wallTouches = count_touching_walls(c.footprint, ins);
 
     return c;
 }
@@ -597,12 +701,20 @@ inline void prune_solution(std::vector<int>& selected,
         int bestRemovePos = -1;
         double bestScore = cur.score;
 
-        for (int i = 0; i < static_cast<int>(selected.size()); ++i) {
+        int n_sel = static_cast<int>(selected.size());
+        std::vector<double> evals(n_sel, std::numeric_limits<double>::infinity());
+
+        #pragma omp parallel for schedule(dynamic)
+        for (int i = 0; i < n_sel; ++i) {
             std::vector<int> tmp = selected;
             tmp.erase(tmp.begin() + i);
             Solution trial = evaluate_solution(cands, tmp, usableArea);
-            if (trial.score + EPS < bestScore) {
-                bestScore = trial.score;
+            evals[i] = trial.score;
+        }
+
+        for (int i = 0; i < n_sel; ++i) {
+            if (evals[i] + EPS < bestScore) {
+                bestScore = evals[i];
                 bestRemovePos = i;
             }
         }

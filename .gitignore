@@ -2,6 +2,10 @@
 *.pptx
 *.exe
 *.out
+.vscode
+__pycache__
 solution*.csv
 solution.csv
-Drafts
+drafts
+cpp_*
+!solver.out
