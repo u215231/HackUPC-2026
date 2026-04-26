@@ -265,15 +265,15 @@ def read_data(data_dir: Path | str) -> Mecalux:
     return Mecalux(data, data_dir)
 
 if __name__ == "__main__":
-    CASE_ID = 3
+    CASE_ID = 1
     SOLVER = "../../bin/solver.out"
-    DATA_DIR = BASE_DIR / f"PublicTestCases/Case{CASE_ID}"
+    DATA_DIR = BASE_DIR / f"PrivateTestCases/PrivateCase{CASE_ID}_flame"
     OUTPUT_PATH = DATA_DIR / Mecalux.OUTPUT
     
     ABSOLUTE_MIN = False
     GREEDY_MIN = True
     DISPLAY_SOLUTION = True
-    DISPLAY_QUALITY = True
+    DISPLAY_QUALITY = False
     RUN_SA = False # Simulated Annealing
 
     if GREEDY_MIN:
@@ -318,9 +318,11 @@ if __name__ == "__main__":
                 continue
         end_time = time.perf_counter()
         print(f"Total time: {end_time - start_time} [s]")
-        # Path(OUTPUT_PATH).rename(
-        #     OUTPUT_PATH.parent / (OUTPUT_PATH.stem + "_opt" + OUTPUT_PATH.suffix))
-    
+        import shutil
+        shutil.copy2(
+            OUTPUT_PATH,
+            OUTPUT_PATH.parent / (OUTPUT_PATH.stem + "_opt" + OUTPUT_PATH.suffix))
+       
     data = read_data(DATA_DIR)
 
     if DISPLAY_QUALITY:
@@ -328,17 +330,22 @@ if __name__ == "__main__":
 
     if DISPLAY_SOLUTION:
         print("Displaying solution (press CTRL + W)...")
+        plt.figure("Solution 2D")
         data.display_warehouse_2d()
         data.display_obstacles_2d()
         data.display_soultion_2d()
-        plt.show()
+        # plt.show()
+        plt.figure("Ceiling 2D")
+        data.display_ceiling_2d()
+        # plt.show()
+        plt.figure("View 3D")
         data.display_warehouse_3d(height=0)
         data.display_obstacles_3d()
         data.display_soultion_3d()
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
         ax = plt.gca()
         ax.grid(False)
-        fix_yaw_scrolling_3d()
+        fix_roll_scrolling_3d()
         plt.show()
 
         
