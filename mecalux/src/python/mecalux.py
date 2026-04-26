@@ -270,12 +270,12 @@ if __name__ == "__main__":
     OUTPUT_PATH = DATA_DIR / Mecalux.OUTPUT
     
     ABSOLUTE_MIN = False
-    COMPILE_CPP = True
-    DISPLAY_SOLUTION = False
-    DISPLAY_QUALITY = True
+    GREEDY_MIN = False
+    DISPLAY_SOLUTION = True
+    DISPLAY_QUALITY = False
     RUN_SA = False # Simulated Annealing
 
-    if COMPILE_CPP:
+    if GREEDY_MIN:
         print("Running Mecalux Solver...")
         angle_step = 10
         grid_step = 500
@@ -314,8 +314,10 @@ if __name__ == "__main__":
                 print(f"Quality score: {quality}")
             else:
                 continue
-        # Path(OUTPUT_PATH).rename(
-        #     OUTPUT_PATH.parent / (OUTPUT_PATH.stem + "_opt" + OUTPUT_PATH.suffix))
+        import shutil
+        shutil.copy2(
+            OUTPUT_PATH, 
+            OUTPUT_PATH.parent / (OUTPUT_PATH.stem + "_opt" + OUTPUT_PATH.suffix))
     
     data = read_data(DATA_DIR)
 
