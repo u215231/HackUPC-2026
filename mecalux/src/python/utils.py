@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from abc import ABC, abstractmethod
+from abc import ABC
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
 
 def get_translation_2d(tx: int, ty: int) -> np.ndarray:
     """Return a 2x1 array of a translation vector [tx, ty].T."""
@@ -10,14 +12,16 @@ def get_rotation_2d(radians: float) -> np.ndarray:
     """Return a 2x1 array 2x2 of a rotation matrix based on a radians angle."""
     return np.array([
         [np.cos(radians), -np.sin(radians)],
-        [np.sin(radians), np.cos(radians)]])
+        [np.sin(radians), np.cos(radians)]
+    ])
 
 def get_scaling_2d(sx: int, sy: int) -> np.ndarray:
     """Return a 2x2 array of a scaling matrix, i.e., a diagonal matrix of 
     entries sx and sy."""
     return np.array([
         [sx, 0],
-        [0, sy]])
+        [0, sy]
+    ])
 
 def get_translation_3d(tx: int, ty: int, tz: int) -> np.ndarray:
     return np.array([[tx, ty, tz]]).T
@@ -27,7 +31,8 @@ def get_yaw_rotation_3d(radians: float) -> np.ndarray:
     return np.array([
         [np.cos(radians), -np.sin(radians), 0],
         [np.sin(radians), np.cos(radians),  0],
-        [0,               0,                1]])
+        [0,               0,                1]
+    ])
 
 def transform_points(
         points: np.ndarray, 
@@ -127,7 +132,63 @@ class Mesh3D(Mesh):
             x = [self.vertices[0, u], self.vertices[0, v]]
             y = [self.vertices[1, u], self.vertices[1, v]]
             z = [self.vertices[2, u], self.vertices[2, v]]
-            plt.plot(x, y, z, color=color, linewidth=linewidth)
+            plt.plot(x, y, z, color=color, linewidth=linewidth, zorder=14)
+
+    def display_with_base(
+            self, 
+            color='gray', 
+            linewidth=2, 
+            facecolor='red', 
+            facealpha=0.4):
+        ax = plt.gca()
+        for u, v in self.edges:
+            x = [self.vertices[0, u], self.vertices[0, v]]
+            y = [self.vertices[1, u], self.vertices[1, v]]
+            z = [self.vertices[2, u], self.vertices[2, v]]
+            ax.plot(x, y, z, color=color, linewidth=linewidth, zorder=10)
+        x_base = self.vertices[0, 0:4]
+        y_base = self.vertices[1, 0:4]
+        z_base = self.vertices[2, 0:4]
+        vertexs = [list(zip(x_base, y_base, z_base))]
+        base_polygon = Poly3DCollection(
+            verts=vertexs, 
+            facecolors=facecolor, 
+            alpha=facealpha,
+            zorder=1)
+        ax.add_collection3d(base_polygon)
+
+    def display_with_faces(
+            self, 
+            color='gray', 
+            linewidth=2, 
+            facecolor='red', 
+            facealpha=0.4):
+        ax = plt.gca()
+        for u, v in self.edges:
+            x = [self.vertices[0, u], self.vertices[0, v]]
+            y = [self.vertices[1, u], self.vertices[1, v]]
+            z = [self.vertices[2, u], self.vertices[2, v]]
+            ax.plot(x, y, z, color=color, linewidth=linewidth, zorder=1)
+        faces_indices = [
+            [0, 1, 2, 3],
+            [4, 5, 6, 7],
+            [0, 1, 5, 4],
+            [1, 2, 6, 5],
+            [2, 3, 7, 6],
+            [3, 0, 4, 7]
+        ]
+        faces_verts = []
+        for face in faces_indices:
+            x_face = [self.vertices[0, i] for i in face]
+            y_face = [self.vertices[1, i] for i in face]
+            z_face = [self.vertices[2, i] for i in face]
+            faces_verts.append(list(zip(x_face, y_face, z_face)))
+        faces_polygons = Poly3DCollection(
+            verts=faces_verts, 
+            facecolors=facecolor, 
+            alpha=facealpha,
+            zorder=12)
+        ax.add_collection3d(faces_polygons)
 
 class Mesh2D(Mesh):
     def __init__(self, vertices, edges):

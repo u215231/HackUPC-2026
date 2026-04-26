@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import subprocess
 import sys
 from utils import *
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 BASE_DIR = Path(__file__).parent.parent.parent
 DEG_RAD = np.pi / 180.0
@@ -14,6 +13,9 @@ class Mecalux:
     """
     Class to pares Mecalux files into Numpy matrices stored in attributes 
     as the same name of the files.
+
+    Our goal: Place bays in a warehouse the cheapest way using the largest 
+    ammount of area.
 
     Attributes:
         ceiling (np.array): Array of columns being [Width, Height].
@@ -63,6 +65,7 @@ class Mecalux:
         return calculate_poligon_area(self.warehouse[:, 0], self.warehouse[:, 1])
 
     def compute_quality(self) -> float:
+        """Quality of the solution: the cheapest as possible."""
         if self.output is None:
             return
         prices_loads = self.compute_price_load_ratio()
@@ -215,7 +218,10 @@ class Mecalux:
         rotation = get_yaw_rotation_3d(output[3] * DEG_RAD)
         mesh = get_prism_3d_mesh(type_of_bay[1], type_of_bay[2], type_of_bay[3])
         mesh.transform(translation, rotation)
-        mesh.display(color='gray', linewidth=1)
+        mesh.display_with_faces(
+            linewidth=1, 
+            facecolor=(type_of_bay[0] / self.types_of_bays[:, 0].max(), 0.0, 0.0),
+            facealpha=0.4)
 
     def display_soultion_3d(self): 
         output = self.output
@@ -243,17 +249,21 @@ def read_data(data_dir: Path | str) -> Mecalux:
 
 if __name__ == "__main__":
     CASE_ID = 0
+    SOLVER = "../../bin/solver.out"
     DATA_DIR = BASE_DIR / f"PublicTestCases/Case{CASE_ID}"
+    OUTPUT_PATH = DATA_DIR / Mecalux.OUTPUT
     
-    COMPILE_CPP = True
+    COMPILE_CPP = False
     DISPLAY_SOLUTION = True
     DISPLAY_QUALITY = True
-    RUN_SA = True
+    RUN_SA = False # Simulated Annealing
 
     if COMPILE_CPP:
         print("Running Mecalux Solver...")
-        sa_flag = 1 if RUN_SA else 0
-        cmd = f"../../bin/solver.out {DATA_DIR} {DATA_DIR / Mecalux.OUTPUT} {sa_flag} 500 10"
+        angle_step = 10
+        grid_step = 500
+        sa_flag = int(RUN_SA)
+        cmd = f"{SOLVER} {DATA_DIR} {OUTPUT_PATH} {sa_flag} {grid_step} {angle_step}"
         process = subprocess.run(
             cmd, 
             shell=True,
