@@ -17,16 +17,16 @@ struct CliArgs {
 void print_usage(const char* argv0) {
     std::cerr
         << "Usage:\n"
-        << "  " << argv0 << " <case_dir> <output.csv> "
+        << "  " << argv0 << " <case_dir> <output.csv> <run_sa_bool> "
         << "[gridStep=500] [angleStep=10]\n\n"
         << "Example fast test:\n"
-        << "  " << argv0 << " ./PublicTestCases/Case0 solution.csv 500 10\n\n"
-        << "Example better quality:\n"
-        << "  " << argv0 << " ./PublicTestCases/Case0 solution.csv 250 5\n";
+        << "  " << argv0 << " ./PublicTestCases/Case0 solution.csv 1 500 10\n\n"
+        << "Example better quality without SA:\n"
+        << "  " << argv0 << " ./PublicTestCases/Case0 solution.csv 0 250 5\n";
 }
 
 CliArgs parse_args(int argc, char** argv) {
-    if (argc < 3) {
+    if (argc < 4) {
         print_usage(argv[0]);
         std::exit(1);
     }
@@ -34,9 +34,10 @@ CliArgs parse_args(int argc, char** argv) {
     CliArgs a;
     a.caseDir = argv[1];
     a.outputCsv = argv[2];
+    a.params.runSa = (std::string(argv[3]) == "1" || std::string(argv[3]) == "true" || std::string(argv[3]) == "True");
 
-    if (argc > 3) a.params.gridStep = std::stod(argv[3]);
-    if (argc > 4) a.params.angleStep = std::stod(argv[4]);
+    if (argc > 4) a.params.gridStep = std::stod(argv[4]);
+    if (argc > 5) a.params.angleStep = std::stod(argv[5]);
 
     return a;
 }

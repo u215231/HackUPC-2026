@@ -248,10 +248,12 @@ if __name__ == "__main__":
     COMPILE_CPP = True
     DISPLAY_SOLUTION = True
     DISPLAY_QUALITY = True
+    RUN_SA = True
 
     if COMPILE_CPP:
         print("Running Mecalux Solver...")
-        cmd = f"../../bin/solver.out {DATA_DIR} {DATA_DIR / Mecalux.OUTPUT} 500 10"
+        sa_flag = 1 if RUN_SA else 0
+        cmd = f"../../bin/solver.out {DATA_DIR} {DATA_DIR / Mecalux.OUTPUT} {sa_flag} 500 10"
         process = subprocess.run(
             cmd, 
             shell=True,

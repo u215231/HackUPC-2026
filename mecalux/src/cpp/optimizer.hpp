@@ -33,6 +33,7 @@ struct OptimizerParams {
     int saChains = 0;
     int saIterations = 25000;
     bool useGapRules = true;
+    bool runSa = true;
     std::size_t maxCandidates = 250000;
 };
 
@@ -529,7 +530,6 @@ inline Solution run_parallel_sa(const std::vector<Candidate>& cands,
                                 double usableArea,
                                 bool useGapRules,
                                 const Solution& greedyBest,
-                                int chains,
                                 int iterations,
                                 std::uint64_t baseSeed) {
     // Only ONE chain as requested, parallelized internally
@@ -568,19 +568,21 @@ inline Solution run_full_optimizer(const Instance& ins,
     );
     print_solution_summary("Greedy", greedy);
 
-    std::cerr << "Running simulated annealing chains...\n";
-    Solution best = run_parallel_sa(
-        outCandidates,
-        area,
-        params.useGapRules,
-        greedy,
-        params.saChains,
-        params.saIterations,
-        seed ^ 0x9E3779B97F4A7C15ULL
-    );
-    print_solution_summary("Best", best);
+    Solution best = greedy;
+    if (params.runSa) {
+        std::cerr << "Running simulated annealing chains...\n";
+        best = run_parallel_sa(
+            outCandidates,
+            area,
+            params.useGapRules,
+            greedy,
+            params.saIterations,
+            seed ^ 0x9E3779B97F4A7C15ULL
+        );
+        print_solution_summary("Best", best);
+    }
 
-    return greedy;
+    return best;
 }
 
 } // namespace whopt
