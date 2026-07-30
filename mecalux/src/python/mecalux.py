@@ -230,24 +230,30 @@ class Mecalux:
             bay_id = int(output[i, 0])
             self.display_bay_2d(output[i, :], types_of_bays[bay_id, :])
 
-    def display_bay_3d(self, output: np.ndarray, type_of_bay: np.ndarray):
+    def display_bay_3d(self, output: np.ndarray, type_of_bay: np.ndarray, with_base=True):
         translation = get_translation_3d(output[1], output[2], 0)
         rotation = get_yaw_rotation_3d(output[3] * DEG_RAD)
         mesh = get_prism_3d_mesh(type_of_bay[1], type_of_bay[2], type_of_bay[3])
         mesh.transform(translation, rotation)
-        mesh.display_with_base(
+        if with_base:
+            mesh.display_with_base(
+                linewidth=1, 
+                facecolor=(type_of_bay[0] / self.types_of_bays[:, 0].max(), 0.0, 0.0),
+                facealpha=0.4)
+        else:
+            mesh.display_with_faces(
             linewidth=1, 
             facecolor=(type_of_bay[0] / self.types_of_bays[:, 0].max(), 0.0, 0.0),
             facealpha=0.4)
 
-    def display_soultion_3d(self): 
+    def display_soultion_3d(self, with_base=True): 
         output = self.output
         types_of_bays = self.types_of_bays
         if output is None:
             return
         for i in range(len(output)):
             bay_id = int(output[i, 0])
-            self.display_bay_3d(output[i, :], types_of_bays[bay_id, :])
+            self.display_bay_3d(output[i, :], types_of_bays[bay_id, :], with_base)
             
 def read_data(data_dir: Path | str) -> Mecalux:
     """
@@ -265,21 +271,22 @@ def read_data(data_dir: Path | str) -> Mecalux:
     return Mecalux(data, data_dir)
 
 if __name__ == "__main__":
-    CASE_ID = 1
+    CASE_ID = 3
     SOLVER = "../../bin/solver.out"
-    DATA_DIR = BASE_DIR / f"PrivateTestCases/PrivateCase{CASE_ID}_flame"
+    DATA_DIR = BASE_DIR / f"PublicTestCases/Case{CASE_ID}"
+    #f"PrivateTestCases/PrivateCase{CASE_ID}_flame"
     OUTPUT_PATH = DATA_DIR / Mecalux.OUTPUT
     
     ABSOLUTE_MIN = False
-    GREEDY_MIN = True
+    GREEDY_MIN = False
     DISPLAY_SOLUTION = True
-    DISPLAY_QUALITY = False
+    DISPLAY_QUALITY = True
     RUN_SA = False # Simulated Annealing
 
     if GREEDY_MIN:
         print("Running Mecalux Solver...")
-        angle_step = 10
-        grid_step = 500
+        angle_step = 90
+        grid_step = 2000
         sa_flag = int(RUN_SA)
         cmd = f"{SOLVER} {DATA_DIR} {OUTPUT_PATH} {sa_flag} {grid_step} {angle_step}"
         process = subprocess.run(
@@ -338,10 +345,18 @@ if __name__ == "__main__":
         plt.figure("Ceiling 2D")
         data.display_ceiling_2d()
         # plt.show()
-        plt.figure("View 3D")
+        plt.figure("View 3D Faces")
         data.display_warehouse_3d(height=0)
         data.display_obstacles_3d()
-        data.display_soultion_3d()
+        data.display_soultion_3d(False)
+        plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        ax = plt.gca()
+        ax.grid(False)
+        fix_yaw_scrolling_3d()
+        plt.figure("View 3D Bases")
+        data.display_warehouse_3d(height=0)
+        data.display_obstacles_3d()
+        data.display_soultion_3d(True)
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
         ax = plt.gca()
         ax.grid(False)
